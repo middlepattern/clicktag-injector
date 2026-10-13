@@ -50,6 +50,7 @@
             margin-top: 20px;
             font-size: 14px;
             color: #555;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -75,7 +76,7 @@
 	<meta name="ad.size" content="width=300,height=600">
 		<script type="text/javascript">
 			var clickTag = "https://research.ucalgary.ca/energy";
-		</script>
+		<\/script>
 	<style>
 		body{
 			background-color:#000000;
@@ -100,19 +101,22 @@
 		<a href="javascript:void(window.open(clickTag))">
 `;
 
-    const END_CODE = `
-</script>
-	</a>
-</body>
-</html>`;
+    // Breaking up the closing script tag so the browser doesn't panic
+    const END_CODE = '\n</sc' + 'ript>\n\t</a>\n</body>\n</html>';
+
+    // 1. PREVENT NATIVE BROWSER FILE OPENING
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        window.addEventListener(eventName, function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }, false);
+    });
 
     const dropZone = document.getElementById('drop-zone');
     const statusText = document.getElementById('status');
     const urlInput = document.getElementById('urlInput');
 
-    // Drag and drop event listeners
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
+    dropZone.addEventListener('dragover', () => {
         dropZone.classList.add('hover');
     });
 
@@ -121,7 +125,6 @@
     });
 
     dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
         dropZone.classList.remove('hover');
         
         const file = e.dataTransfer.files[0];
@@ -135,82 +138,81 @@
 
     async function processZip(file) {
         statusText.innerText = "Processing zip file...";
-        statusText.style.color = "#333";
+        statusText.style.color = "#007bff";
         const targetUrl = urlInput.value.trim();
 
         try {
             const zip = await JSZip.loadAsync(file);
             const newZip = new JSZip();
-            
-            // Loop through every file in the uploaded zip
             const files = Object.keys(zip.files);
             
             for (const relativePath of files) {
                 const zipEntry = zip.files[relativePath];
                 
-                if (zipEntry.dir) continue; // Skip directories, we only care about files
+                // Skip directories and Mac hidden files
+                if (zipEntry.dir || relativePath.includes('__MACOSX') || relativePath.endsWith('.DS_Store')) {
+                    continue; 
+                }
                 
-                // e.g., path: "300x600/demo/data.html"
-                const pathParts = relativePath.split('/');
+                // Dynamically collapse "demo" folder out of the path
+                let newPath = relativePath;
+                if (relativePath.includes('/demo/') || relativePath.startsWith('demo/')) {
+                    newPath = relativePath.replace('/demo/', '/').replace(/^demo\//, '');
+                }
                 
-                // Ensure it matches the expected <size>/demo/... structure
-                if (pathParts.length >= 3 && pathParts[1] === 'demo') {
-                    const folderName = pathParts[0]; // e.g., "300x600"
-                    const fileName = pathParts.slice(2).join('/'); // Everything after 'demo/'
+                // If it is the core HTML file, process the text
+                if (relativePath.endsWith('data.html')) {
+                    newPath = newPath.replace('data.html', 'index.html');
                     
-                    // Attempt to extract dimensions from folder name
                     let final_width = "300", final_height = "600";
-                    if (folderName.includes('x')) {
-                        [final_width, final_height] = folderName.split('x');
+                    const pathParts = relativePath.split('/');
+                    const demoIdx = pathParts.indexOf('demo');
+                    
+                    // Look one folder above 'demo' for dimensions
+                    if (demoIdx > 0) {
+                        const dimFolder = pathParts[demoIdx - 1]; 
+                        if (dimFolder.includes('x')) {
+                            [final_width, final_height] = dimFolder.split('x');
+                        }
                     }
 
-                    if (fileName === 'data.html') {
-                        // 1. READ HTML
-                        let textmani = await zipEntry.async("string");
-                        
-                        // 2. BULLETPROOF SLICING
-                        let start_idx = textmani.indexOf('<!-- build:scripto -->');
-                        if (start_idx === -1) start_idx = textmani.indexOf('<script>');
-                        let end_idx = textmani.lastIndexOf('</script>');
+                    let textmani = await zipEntry.async("string");
+                    let start_idx = textmani.indexOf('<!-- build:scripto -->');
+                    if (start_idx === -1) start_idx = textmani.indexOf('<script>');
+                    
+                    // FIXED: Broken up string here
+                    let end_idx = textmani.lastIndexOf('</sc' + 'ript>');
 
-                        if (start_idx !== -1 && end_idx !== -1) {
-                            let payload = textmani.substring(start_idx, end_idx);
-                            
-                            // 3. INJECT SIZE AND URL
-                            let temp_size = `content="width=${final_width},height=${final_height}">`;
-                            let customStart = START_CODE.replace('content="width=300,height=600">', temp_size);
-                            customStart = customStart.replace("https://research.ucalgary.ca/energy", targetUrl);
-                            
-                            let finalHtml = customStart + payload + END_CODE;
-                            
-                            // 4. RENAME TO index.html AND MOVE OUT OF DEMO
-                            newZip.file(`${folderName}/index.html`, finalHtml);
-                        } else {
-                            // If structure isn't recognized, copy original
-                            newZip.file(`${folderName}/index.html`, textmani);
-                        }
+                    if (start_idx !== -1 && end_idx !== -1) {
+                        let payload = textmani.substring(start_idx, end_idx);
+                        
+                        let temp_size = `content="width=${final_width},height=${final_height}">`;
+                        let customStart = START_CODE.replace('content="width=300,height=600">', temp_size);
+                        customStart = customStart.replace("https://research.ucalgary.ca/energy", targetUrl);
+                        
+                        let finalHtml = customStart + payload + END_CODE;
+                        newZip.file(newPath, finalHtml);
                     } else {
-                        // Move all other files out of the 'demo' folder
-                        let fileContent = await zipEntry.async("arraybuffer");
-                        newZip.file(`${folderName}/${fileName}`, fileContent);
+                        // Fallback if the script tags are missing
+                        newZip.file(newPath, textmani);
                     }
                 } else {
-                    // If it's a file outside the demo folder, just copy it over directly
+                    // It's an image or script, just copy it over with the new flattened path
                     let fileContent = await zipEntry.async("arraybuffer");
-                    newZip.file(relativePath, fileContent);
+                    newZip.file(newPath, fileContent);
                 }
             }
 
-            // Generate and download the new zip
             statusText.innerText = "Zipping processed files...";
             const content = await newZip.generateAsync({type:"blob"});
             saveAs(content, "Processed_" + file.name);
+            
             statusText.innerText = "Done! Download started.";
             statusText.style.color = "green";
 
         } catch (err) {
             console.error(err);
-            statusText.innerText = "An error occurred while processing the zip.";
+            statusText.innerText = "An error occurred while processing the zip. See console.";
             statusText.style.color = "red";
         }
     }
