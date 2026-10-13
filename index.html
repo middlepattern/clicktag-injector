@@ -1,72 +1,3 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Clicktag Injector</title>
-    <!-- Load JSZip and FileSaver for browser-based zip manipulation -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background-color: #f4f4f5;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 50px;
-        }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            width: 100%;
-            max-width: 500px;
-            text-align: center;
-        }
-        input[type="text"] {
-            width: 90%;
-            padding: 10px;
-            margin-bottom: 20px;
-            border: 1px solid #ccc;
-            border-radius: 6px;
-            font-size: 16px;
-        }
-        #drop-zone {
-            border: 2px dashed #007bff;
-            border-radius: 8px;
-            padding: 50px 20px;
-            background-color: #f8fbff;
-            color: #007bff;
-            font-weight: bold;
-            transition: background-color 0.2s;
-            cursor: pointer;
-        }
-        #drop-zone.hover {
-            background-color: #e2efff;
-        }
-        #status {
-            margin-top: 20px;
-            font-size: 14px;
-            color: #555;
-            font-weight: bold;
-        }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <h2>Clicktag Injector</h2>
-    <p>1. Enter the destination URL:</p>
-    <input type="text" id="urlInput" value="https://ucalgary.ca/startsomething">
-    
-    <p>2. Drop your zipped folder here:</p>
-    <div id="drop-zone">Drag & Drop .ZIP file here</div>
-    
-    <div id="status">Waiting for file...</div>
-</div>
-
 <script>
     // --- EXACT START AND END CODES ---
     const START_CODE = `<!DOCTYPE html>
@@ -124,21 +55,32 @@
         dropZone.classList.remove('hover');
     });
 
-    dropZone.addEventListener('drop', (e) => {
+    // Handle multiple file drops
+    dropZone.addEventListener('drop', async (e) => {
         dropZone.classList.remove('hover');
         
-        const file = e.dataTransfer.files[0];
-        if (file && file.name.endsWith('.zip')) {
-            processZip(file);
+        // Grab all files dropped, filter only for .zip
+        const files = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.zip'));
+        
+        if (files.length > 0) {
+            statusText.innerText = `Processing ${files.length} file(s)...`;
+            statusText.style.color = "#007bff";
+            
+            // Process each zip sequentially
+            for (let i = 0; i < files.length; i++) {
+                statusText.innerText = `Processing file ${i + 1} of ${files.length}...`;
+                await processZip(files[i]);
+            }
+            
+            statusText.innerText = `Done! Downloaded ${files.length} file(s).`;
+            statusText.style.color = "green";
         } else {
-            statusText.innerText = "Error: Please drop a .zip file.";
+            statusText.innerText = "Error: Please drop at least one .zip file.";
             statusText.style.color = "red";
         }
     });
 
     async function processZip(file) {
-        statusText.innerText = "Processing zip file...";
-        statusText.style.color = "#007bff";
         const targetUrl = urlInput.value.trim();
 
         try {
@@ -149,18 +91,15 @@
             for (const relativePath of files) {
                 const zipEntry = zip.files[relativePath];
                 
-                // Skip directories and Mac hidden files
                 if (zipEntry.dir || relativePath.includes('__MACOSX') || relativePath.endsWith('.DS_Store')) {
                     continue; 
                 }
                 
-                // Dynamically collapse "demo" folder out of the path
                 let newPath = relativePath;
                 if (relativePath.includes('/demo/') || relativePath.startsWith('demo/')) {
                     newPath = relativePath.replace('/demo/', '/').replace(/^demo\//, '');
                 }
                 
-                // If it is the core HTML file, process the text
                 if (relativePath.endsWith('data.html')) {
                     newPath = newPath.replace('data.html', 'index.html');
                     
@@ -168,7 +107,6 @@
                     const pathParts = relativePath.split('/');
                     const demoIdx = pathParts.indexOf('demo');
                     
-                    // Look one folder above 'demo' for dimensions
                     if (demoIdx > 0) {
                         const dimFolder = pathParts[demoIdx - 1]; 
                         if (dimFolder.includes('x')) {
@@ -179,8 +117,6 @@
                     let textmani = await zipEntry.async("string");
                     let start_idx = textmani.indexOf('<!-- build:scripto -->');
                     if (start_idx === -1) start_idx = textmani.indexOf('<script>');
-                    
-                    // FIXED: Broken up string here
                     let end_idx = textmani.lastIndexOf('</sc' + 'ript>');
 
                     if (start_idx !== -1 && end_idx !== -1) {
@@ -193,30 +129,22 @@
                         let finalHtml = customStart + payload + END_CODE;
                         newZip.file(newPath, finalHtml);
                     } else {
-                        // Fallback if the script tags are missing
                         newZip.file(newPath, textmani);
                     }
                 } else {
-                    // It's an image or script, just copy it over with the new flattened path
                     let fileContent = await zipEntry.async("arraybuffer");
                     newZip.file(newPath, fileContent);
                 }
             }
 
-            statusText.innerText = "Zipping processed files...";
             const content = await newZip.generateAsync({type:"blob"});
-            saveAs(content, "Processed_" + file.name);
-            
-            statusText.innerText = "Done! Download started.";
-            statusText.style.color = "green";
+            // Trigger the download with the exact original file name
+            saveAs(content, file.name);
 
         } catch (err) {
-            console.error(err);
-            statusText.innerText = "An error occurred while processing the zip. See console.";
-            statusText.style.color = "red";
+            console.error(`Error processing ${file.name}:`, err);
         }
     }
 </script>
 
-</body>
-</html>
+```
