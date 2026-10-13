@@ -205,7 +205,7 @@
 
             statusText.innerText = "Zipping processed files...";
             const content = await newZip.generateAsync({type:"blob"});
-            saveAs(content, "Processed_" + file.name);
+            saveAs(content, file.name);
             
             statusText.innerText = "Done! Download started.";
             statusText.style.color = "green";
